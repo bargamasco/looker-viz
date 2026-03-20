@@ -1,87 +1,138 @@
 (function() {
-    const viz = {
-        id: "sankey_v2",
-        label: "Sankey V2",
-        options: {
-            color_range: {
-                type: "array",
-                label: "Color Range",
-                display: "colors",
-                default: ["#3EB0D5", "#B1399E", "#C2DD67", "#592EC2", "#4276BE", "#FFD954", "#9673FF"]
-            }
-        },
-        create: function(element, config) {
-            element.innerHTML = `<style>
-                #vis { font-family: sans-serif; height: 100%; width: 100%; }
-                .node rect { cursor: move; fill-opacity: .9; shape-rendering: crispEdges; }
-                .node text { pointer-events: none; text-shadow: 0 1px 0 #fff; font-size: 11px; }
-                .link { fill: none; stroke: #000; stroke-opacity: .2; }
-                .link:hover { stroke-opacity: .5; }
-            </style><div id="vis"></div>`;
-        },
-        updateAsync: function(data, element, config, queryResponse, details, done) {
-            this.clearErrors();
-            const container = element.querySelector('#vis');
-            container.innerHTML = "";
+  looker.visualizations.add({
+    id: "custom_sankey_v2",
+    label: "Sankey V2 (Familhão)",
+    options: {
+      color_range: {
+        type: "array",
+        label: "Cores do Fluxo",
+        display: "colors",
+        default: ["#3EB0D5", "#B1399E", "#C2DD67", "#592EC2", "#4276BE", "#FFD954", "#9673FF"]
+      }
+    },
+    create: function(element, config) {
+      element.innerHTML = `
+        <style>
+          #vis-container { font-family: 'Open Sans', Helvetica, Arial, sans-serif; height: 100%; width: 100%; }
+          .node rect { cursor: move; fill-opacity: .9; shape-rendering: crispEdges; }
+          .node text { pointer-events: none; text-shadow: 0 1px 0 #fff; font-size: 11px; }
+          .link { fill: none; stroke: #000; stroke-opacity: .12; }
+          .link:hover { stroke-opacity: .4; }
+        </style>
+        <div id="vis-container"></div>`;
+    },
+    updateAsync: function(data, element, config, queryResponse, details, done) {
+      this.clearErrors();
+      const container = element.querySelector('#vis-container');
+      container.innerHTML = "";
 
-            if (queryResponse.fields.dimension_like.length < 2) {
-                this.addError({title: "Erro de Dados", message: "O Sankey precisa de no mínimo 2 dimensões e 1 medida."});
-                return;
-            }
+      if (queryResponse.fields.dimension_like.length < 2 || queryResponse.fields.measure_like.length < 1) {
+        this.addError({title: "Erro de Configuração", message: "Este gráfico exige pelo menos 2 Dimensões e 1 Medida."});
+        return;
+      }
 
-            // Injeta D3 dinamicamente se não existir
-            if (typeof d3 === 'undefined') {
-                const script = document.createElement('script');
-                script.src = "https://d3js.org/d3.v4.min.js";
-                script.onload = () => {
-                    const script2 = document.createElement('script');
-                    script2.src = "https://cdn.jsdelivr.net/gh/holtzy/D3-graph-gallery@master/LIB/sankey.js";
-                    script2.onload = () => this.render(data, element, config, queryResponse, done);
-                    document.head.appendChild(script2);
-                };
-                document.head.appendChild(script);
-            } else {
-                this.render(data, element, config, queryResponse, done);
-            }
-        },
-        render: function(data, element, config, queryResponse, done) {
-            const container = element.querySelector('#vis');
-            const width = element.clientWidth;
-            const height = element.clientHeight;
+      // Função para carregar bibliotecas necessárias
+      const loadScript = (url) => {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = url;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      };
 
-            // Transforma dados do Looker para formato Sankey (Nodes e Links)
-            let nodes = [];
-            let links = [];
-            const d1 = queryResponse.fields.dimension_like[0].name;
-            const d2 = queryResponse.fields.dimension_like[1].name;
-            const m1 = queryResponse.fields.measure_like[0].name;
+      // Carregamento sequencial para garantir que o D3 esteja disponível antes do plugin Sankey
+      Promise.all([
+        loadScript("https://d3js.org/d3.v4.min.js")
+      ]).then(() => {
+        return loadScript("https://cdn.jsdelivr.net/gh/holtzy/D3-graph-gallery@master/LIB/sankey.js");
+      }).then(() => {
+        this.render(data, element, config, queryResponse, done);
+      }).catch((err) => {
+        container.innerHTML = `<div style="padding:20px; color:red;">Erro ao carregar bibliotecas gráficas. Verifique a ligação à internet ou as permissões de CSP.</div>`;
+        console.error("Erro Looker Viz:", err);
+      });
+    },
+    render: function(data, element, config, queryResponse, done) {
+      const container = element.querySelector('#vis-container');
+      const width = element.clientWidth;
+      const height = element.clientHeight;
 
-            data.forEach(d => {
-                const source = d[d1].value;
-                const target = d[d2].value;
-                const value = d[m1].value;
+      const svg = d3.select(container).append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .append("g");
 
-                if (!nodes.includes(source)) nodes.push(source);
-                if (!nodes.includes(target)) nodes.push(target);
+      const sankey = d3.sankey()
+        .nodeWidth(20)
+        .nodePadding(15)
+        .extent([[1, 1], [width - 1, height - 5]]);
 
-                links.push({
-                    source: nodes.indexOf(source),
-                    target: nodes.indexOf(target),
-                    value: value
-                });
-            });
+      let nodes = [];
+      let links = [];
+      const d1 = queryResponse.fields.dimension_like[0].name;
+      const d2 = queryResponse.fields.dimension_like[1].name;
+      const m1 = queryResponse.fields.measure_like[0].name;
 
-            const finalNodes = nodes.map(n => ({ name: n }));
+      data.forEach(d => {
+        const s = d[d1].value || "Nulo";
+        const t = d[d2].value || "Nulo";
+        const v = d[m1].value || 0;
 
-            // Renderização D3 simples
-            container.innerHTML = `<div style="padding:20px; color:#666;">
-                <strong>Sankey V2 Ativo</strong><br>
-                Processando fluxo de ${finalNodes.length} nós e ${links.length} conexões.<br>
-                <small>Caso a imagem não apareça, verifique se há valores nulos nos dados.</small>
-            </div>`;
-            
-            done();
-        }
-    };
-    looker.visualizations.add(viz);
+        if (!nodes.includes(s)) nodes.push(s);
+        if (!nodes.includes(t)) nodes.push(t);
+
+        links.push({
+          source: nodes.indexOf(s),
+          target: nodes.indexOf(t),
+          value: v
+        });
+      });
+
+      const graph = {
+        nodes: nodes.map(n => ({ name: n })),
+        links: links
+      };
+
+      sankey(graph);
+
+      const color = d3.scaleOrdinal(config.color_range || d3.schemeCategory10);
+
+      // Links
+      svg.append("g").selectAll(".link")
+        .data(graph.links)
+        .enter().append("path")
+        .attr("class", "link")
+        .attr("d", d3.sankeyLinkHorizontal())
+        .style("stroke-width", d => Math.max(1, d.width));
+
+      // Nós
+      const node = svg.append("g").selectAll(".node")
+        .data(graph.nodes)
+        .enter().append("g")
+        .attr("class", "node");
+
+      node.append("rect")
+        .attr("x", d => d.x0)
+        .attr("y", d => d.y0)
+        .attr("height", d => d.y1 - d.y0)
+        .attr("width", d => d.x1 - d.x0)
+        .style("fill", d => color(d.name))
+        .style("stroke", "#000")
+        .style("stroke-opacity", 0.1);
+
+      node.append("text")
+        .attr("x", d => d.x0 - 6)
+        .attr("y", d => (d.y1 + d.y0) / 2)
+        .attr("dy", "0.35em")
+        .attr("text-anchor", "end")
+        .text(d => d.name)
+        .filter(d => d.x0 < width / 2)
+        .attr("x", d => d.x1 + 6)
+        .attr("text-anchor", "start");
+
+      done();
+    }
+  });
 }());
